@@ -3,17 +3,48 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const vm = require("vm");
 const CryptoJS = require("crypto-js");
 
 const PORT = Number(process.env.PORT || 10000);
 const PUBLIC_DIR = path.join(__dirname, "public");
-const BASE_URL = "https://m440.in";
-const USER_AGENT =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+const M440_KEY = "X^Ib1O*HLVh%3W2t";
+
+const CryptoJSAesJson = {
+  stringify(cipherParams) {
+    const value = {
+      ct: cipherParams.ciphertext.toString(CryptoJS.enc.Base64),
+    };
+
+    if (cipherParams.iv) {
+      value.iv = cipherParams.iv.toString();
+    }
+
+    if (cipherParams.salt) {
+      value.s = cipherParams.salt.toString();
+    }
+
+    return JSON.stringify(value);
+  },
+
+  parse(jsonText) {
+    const value = JSON.parse(jsonText);
+    const cipherParams = CryptoJS.lib.CipherParams.create({
+      ciphertext: CryptoJS.enc.Base64.parse(value.ct),
+    });
+
+    if (value.iv) {
+      cipherParams.iv = CryptoJS.enc.Hex.parse(value.iv);
+    }
+
+    if (value.s) {
+      cipherParams.salt = CryptoJS.enc.Hex.parse(value.s);
+    }
+
+    return cipherParams;
+  },
+};
 
 const chapterCache = new Map();
-let exisCache = { text: "", expiresAt: 0 };
 
 function send(res, status, body, contentType = "text/plain; charset=utf-8") {
   res.writeHead(status, {
@@ -24,102 +55,65 @@ function send(res, status, body, contentType = "text/plain; charset=utf-8") {
   res.end(body);
 }
 
-async function fetchText(url) {
-  const response = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/javascript,application/json;q=0.9,*/*;q=0.8",
-      "Accept-Language": "es-CL,es;q=0.9,en;q=0.8",
-      Referer: `${BASE_URL}/`,
-    },
-  });
+async function readBody(req, maxBytes = 2_000_000) {
+  const chunks = [];
+  let total = 0;
 
-  if (!response.ok) {
-    throw new Error(`${url} respondió con ${response.status}`);
+  for await (const chunk of req) {
+    total += chunk.length;
+
+    if (total > maxBytes) {
+      throw new Error("La información cifrada es demasiado grande");
+    }
+
+    chunks.push(chunk);
   }
 
-  return response.text();
+  return Buffer.concat(chunks).toString("utf8");
 }
 
-async function getExisScript() {
-  const now = Date.now();
+function decryptChapters(rawBody) {
+  let encrypted = rawBody.trim();
 
-  if (exisCache.text && exisCache.expiresAt > now) {
-    return exisCache.text;
+  if (!encrypted) {
+    throw new Error("No se recibió la información cifrada");
   }
 
-  const text = await fetchText(`${BASE_URL}/js/exis.js`);
-  exisCache = {
-    text,
-    expiresAt: now + 6 * 60 * 60 * 1000,
-  };
-
-  return text;
-}
-
-function extractUsaPoncho(html) {
-  const match = html.match(
-    /const\s+UsaPoncho\s*=\s*("(?:\\.|[^"\\])*")\s*;/s
-  );
-
-  if (!match) {
-    throw new Error("No se encontró UsaPoncho en la ficha del manga");
+  // Aidoku envía el literal JavaScript completo, incluyendo las comillas.
+  if (encrypted.startsWith('"')) {
+    encrypted = JSON.parse(encrypted);
   }
 
-  return JSON.parse(match[1]);
-}
+  const cached = chapterCache.get(encrypted);
 
-async function decryptChapters(mangaUrl) {
-  const cached = chapterCache.get(mangaUrl);
-  const now = Date.now();
-
-  if (cached && cached.expiresAt > now) {
+  if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
   }
 
-  const [html, exis] = await Promise.all([
-    fetchText(mangaUrl),
-    getExisScript(),
-  ]);
+  const bytes = CryptoJS.AES.decrypt(encrypted, M440_KEY, {
+    format: CryptoJSAesJson,
+  });
 
-  const quietConsole = {
-    log() {},
-    info() {},
-    warn() {},
-    error() {},
-    trace() {},
-    debug() {},
-  };
+  const decrypted = bytes.toString(CryptoJS.enc.Utf8);
 
-  const context = {
-    CryptoJS,
-    UsaPoncho: extractUsaPoncho(html),
-    console: quietConsole,
-  };
-
-  vm.createContext(context);
-  vm.runInContext(exis, context, { timeout: 5000 });
-
-  const serialized = vm.runInContext(
-    'typeof jschaptertemp !== "undefined" ? JSON.stringify(jschaptertemp) : ""',
-    context,
-    { timeout: 1000 }
-  );
-
-  if (!serialized) {
-    throw new Error("No se pudo obtener jschaptertemp");
+  if (!decrypted) {
+    throw new Error("No se pudo descifrar la lista de capítulos");
   }
 
-  const chapters = JSON.parse(serialized);
+  let chapters = JSON.parse(decrypted);
+
+  // M440 guarda un JSON dentro de otro JSON.
+  if (typeof chapters === "string") {
+    chapters = JSON.parse(chapters);
+  }
 
   if (!Array.isArray(chapters)) {
-    throw new Error("La lista descifrada no es un arreglo");
+    throw new Error("La lista descifrada no es válida");
   }
 
-  chapterCache.set(mangaUrl, {
+  chapterCache.set(encrypted, {
     value: chapters,
-    expiresAt: now + 30 * 60 * 1000,
+    expiresAt: Date.now() + 30 * 60 * 1000,
   });
 
   return chapters;
@@ -172,7 +166,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, HEAD, OPTIONS",
         "Access-Control-Allow-Headers": "*",
       });
       return res.end();
@@ -183,29 +177,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (requestUrl.pathname === "/m440/chapters") {
-      const rawUrl = requestUrl.searchParams.get("url");
-
-      if (!rawUrl) {
-        return send(res, 400, "Falta el parámetro url");
+      if (req.method !== "POST") {
+        return send(res, 405, "Este endpoint requiere POST");
       }
 
-      let mangaUrl;
-
-      try {
-        mangaUrl = new URL(rawUrl);
-      } catch {
-        return send(res, 400, "URL inválida");
-      }
-
-      if (
-        mangaUrl.protocol !== "https:" ||
-        mangaUrl.hostname !== "m440.in" ||
-        !mangaUrl.pathname.startsWith("/manga/")
-      ) {
-        return send(res, 400, "URL no permitida");
-      }
-
-      const chapters = await decryptChapters(mangaUrl.toString());
+      const rawBody = await readBody(req);
+      const chapters = decryptChapters(rawBody);
 
       return send(
         res,
@@ -235,7 +212,8 @@ code{background:#f2f2f2;padding:4px 7px;border-radius:6px;word-break:break-all}
 </head>
 <body>
 <h1>YRepo M440 activo</h1>
-<p>Proxy de capítulos: <strong>activo</strong>.</p>
+<p>Descifrador de capítulos: <strong>activo</strong>.</p>
+<p>M440 se consulta directamente desde Aidoku; Render solo descifra la información.</p>
 <p>Lista de Aidoku: ${
           listExists
             ? `<code>https://${req.headers.host}/index.min.json</code>`

@@ -232,12 +232,48 @@ impl M440 {
         }
     }
 
-    fn chapters(manga_url: &str) -> Result<Vec<Chapter>> {
-        let encoded = encode_uri_component(manga_url);
-        let url = format!("{CLOUD_URL}/m440/chapters?url={encoded}");
+    fn encrypted_chapter_data(manga_url: &str) -> Result<String> {
+        let document = Self::request(Request::get(manga_url)?).html()?;
 
-        let items: Vec<ProxyChapter> = Self::request(Request::get(url)?)
+        if let Some(scripts) = document.select("script") {
+            for script in scripts {
+                let Some(text) = script.text() else {
+                    continue;
+                };
+
+                let Some(marker_index) = text.find("const UsaPoncho") else {
+                    continue;
+                };
+
+                let section = &text[marker_index..];
+                let Some(equal_index) = section.find('=') else {
+                    continue;
+                };
+
+                let literal = section[equal_index + 1..].trim_start();
+                let Some(end_index) = literal.find(';') else {
+                    continue;
+                };
+
+                let value = literal[..end_index].trim();
+
+                if value.starts_with('"') && value.ends_with('"') {
+                    return Ok(value.to_string());
+                }
+            }
+        }
+
+        bail!("No se encontró la información cifrada de los capítulos.");
+    }
+
+    fn chapters(manga_url: &str) -> Result<Vec<Chapter>> {
+        let encrypted = Self::encrypted_chapter_data(manga_url)?;
+        let url = format!("{CLOUD_URL}/m440/chapters");
+
+        let items: Vec<ProxyChapter> = Self::request(Request::post(url)?)
             .header("Accept", "application/json")
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(encrypted)
             .json_owned()?;
 
         Ok(items
