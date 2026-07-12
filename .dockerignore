@@ -1,0 +1,7 @@
+source-template/
+target/
+*.zip
+.git/
+README.md
+PASOS-RENDER.txt
+*.bat

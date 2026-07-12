@@ -1,0 +1,12 @@
+{
+  "name": "yrepo-cloud",
+  "version": "3.0.0",
+  "private": true,
+  "description": "YRepo Cloud proxy and Aidoku source list",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

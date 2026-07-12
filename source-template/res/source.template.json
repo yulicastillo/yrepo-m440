@@ -1,0 +1,27 @@
+{
+  "info": {
+    "id": "es.inmanga",
+    "name": "InManga",
+    "version": 1,
+    "url": "https://inmanga.com",
+    "urls": [
+      "https://inmanga.com",
+      "https://cdn1.intomanga.com",
+      "__YREPO_CLOUD_URL__"
+    ],
+    "contentRating": 0,
+    "languages": [
+      "es"
+    ]
+  },
+  "listings": [
+    {
+      "id": "popular",
+      "name": "Populares"
+    },
+    {
+      "id": "latest",
+      "name": "Novedades"
+    }
+  ]
+}

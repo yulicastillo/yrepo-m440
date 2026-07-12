@@ -1,0 +1,20 @@
+YREPO CLOUD — PASOS GENERALES
+
+PRIMERA ETAPA
+1. Crea un repositorio PRIVADO en GitHub.
+2. Sube todos los archivos de esta carpeta al repositorio.
+3. En Render crea un Blueprint conectado al repositorio.
+4. Espera el despliegue y copia la URL https://....onrender.com
+
+SEGUNDA ETAPA
+5. En el PC abre PREPARAR-FUENTE-CLOUD.bat
+6. Pega la URL de Render.
+7. Cuando termine, abre SUBIR-A-GITHUB.bat
+8. Espera a que Render vuelva a desplegar.
+
+AIDOKU
+9. Agrega https://TU-URL.onrender.com/index.min.json
+10. Instala/actualiza Manhwa Online.
+11. Prueba el capítulo 113.
+
+Después de eso ya no necesitas dejar el PC encendido.
