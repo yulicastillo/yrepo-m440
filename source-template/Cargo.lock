@@ -131,15 +131,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inmanga"
-version = "1.0.0"
-dependencies = [
- "aidoku",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -158,6 +149,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "m440"
+version = "1.0.0"
+dependencies = [
+ "aidoku",
+ "serde",
 ]
 
 [[package]]

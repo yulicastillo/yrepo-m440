@@ -12,45 +12,56 @@ use aidoku::{
     Chapter, ContentRating, ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult,
     MangaStatus, Page, PageContent, PageContext, Result, Source,
 };
-use core::cmp::Ordering;
 use serde::Deserialize;
 
-const BASE_URL: &str = "https://inmanga.com";
-const IMAGE_CDN: &str = "https://cdn1.intomanga.com";
-const PAGE_SIZE: i32 = 10;
+const BASE_URL: &str = "https://m440.in";
+const CLOUD_URL: &str = "__YREPO_CLOUD_URL__";
 
 #[derive(Deserialize)]
-struct InMangaResultDto {
-    data: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct InMangaResultObjectDto<T> {
-    success: bool,
+struct SearchResponse {
     #[serde(default)]
-    result: Vec<T>,
+    suggestions: Vec<SearchSuggestion>,
 }
 
-#[derive(Deserialize, Default)]
-struct InMangaChapterDto {
-    #[serde(rename = "Number")]
-    number: Option<f64>,
-    #[serde(rename = "RegistrationDate")]
-    _registration_date: String,
-    #[serde(rename = "Identification")]
-    identification: Option<String>,
-    #[serde(rename = "FriendlyChapterNumber")]
-    friendly_chapter_number: Option<String>,
+#[derive(Deserialize)]
+struct SearchSuggestion {
+    value: String,
+    data: String,
 }
 
-struct InManga;
+#[derive(Deserialize)]
+struct LatestResponse {
+    #[serde(default)]
+    data: Vec<LatestManga>,
+    #[serde(rename = "totalPages")]
+    total_pages: i32,
+}
 
-impl InManga {
-    fn request_headers(request: Request) -> Request {
+#[derive(Deserialize)]
+struct LatestManga {
+    #[serde(rename = "manga_name")]
+    name: String,
+    #[serde(rename = "manga_slug")]
+    slug: String,
+}
+
+#[derive(Deserialize)]
+struct ProxyChapter {
+    slug: String,
+    name: String,
+    number: String,
+    #[serde(rename = "created_at")]
+    _created_at: Option<String>,
+}
+
+struct M440;
+
+impl M440 {
+    fn request(request: Request) -> Request {
         request
             .header("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
             .header("Accept-Language", "es-CL,es;q=0.9,en;q=0.8")
-            .header("Referer", "https://inmanga.com/")
+            .header("Referer", "https://m440.in/")
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
@@ -59,8 +70,11 @@ impl InManga {
 
     fn absolute_url(value: &str) -> String {
         let clean = value.trim();
-        if clean.starts_with("http://") || clean.starts_with("https://") {
+
+        if clean.starts_with("https://") || clean.starts_with("http://") {
             clean.into()
+        } else if clean.starts_with("//") {
+            format!("https:{clean}")
         } else if clean.starts_with('/') {
             format!("{BASE_URL}{clean}")
         } else {
@@ -68,65 +82,88 @@ impl InManga {
         }
     }
 
-    fn manga_id_from_url(url: &str) -> String {
-        url.trim_end_matches('/')
+    fn slug_from_url(value: &str) -> String {
+        value
+            .trim_end_matches('/')
             .rsplit('/')
             .next()
             .unwrap_or("")
             .to_string()
     }
 
-    fn manga_list(page: i32, query: &str, sort_by: i32) -> Result<MangaPageResult> {
-        let skip = (page.saturating_sub(1)) * PAGE_SIZE;
-        let encoded_query = encode_uri_component(query);
-        let body = format!(
-            "filter%5Bgeneres%5D%5B%5D=-1&filter%5BqueryString%5D={encoded_query}&filter%5Bskip%5D={skip}&filter%5Btake%5D={PAGE_SIZE}&filter%5Bsortby%5D={sort_by}&filter%5BbroadcastStatus%5D=0&filter%5BonlyFavorites%5D=false&d="
-        );
+    fn cover_for(slug: &str) -> String {
+        format!("{BASE_URL}/uploads/manga/{slug}/cover/cover_250x350.jpg")
+    }
 
-        let document = Self::request_headers(Request::post(format!(
-            "{BASE_URL}/manga/getMangasConsultResult"
-        ))?)
-        .header(
-            "Content-Type",
-            "application/x-www-form-urlencoded; charset=UTF-8",
-        )
-        .header("X-Requested-With", "XMLHttpRequest")
-        .body(body)
-        .html()?;
+    fn manga_from_slug(slug: String, title: String) -> Manga {
+        Manga {
+            key: slug.clone(),
+            title,
+            cover: Some(Self::cover_for(&slug)),
+            url: Some(format!("{BASE_URL}/manga/{slug}")),
+            content_rating: ContentRating::NSFW,
+            ..Default::default()
+        }
+    }
 
+    fn parse_cards(url: &str) -> Result<MangaPageResult> {
+        let document = Self::request(Request::get(url)?).html()?;
         let mut entries = Vec::new();
 
-        if let Some(elements) = document.select("body > a") {
-            for element in elements {
-                let href = element.attr("abs:href").unwrap_or_default();
-                let key = Self::manga_id_from_url(&href);
-                let title = element
-                    .select_first("h4.m0")
-                    .and_then(|item| item.text())
-                    .unwrap_or_default();
-                let cover = element.select_first("img").and_then(|image| {
-                    image
-                        .attr("abs:data-src")
-                        .filter(|value| !value.is_empty())
-                        .or_else(|| image.attr("abs:src"))
-                });
+        if let Some(cards) = document.select("div.media") {
+            for card in cards {
+                let Some(anchor) = card.select_first(".media-heading a, .manga-heading a") else {
+                    continue;
+                };
+
+                let href = anchor.attr("abs:href").unwrap_or_default();
+                let key = Self::slug_from_url(&href);
+                let title = anchor.text().unwrap_or_default();
 
                 if key.is_empty() || title.is_empty() {
                     continue;
                 }
+
+                let cover = card
+                    .select_first("img")
+                    .and_then(|image| {
+                        image
+                            .attr("abs:data-background-image")
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| {
+                                image
+                                    .attr("abs:data-cfsrc")
+                                    .filter(|value| !value.is_empty())
+                            })
+                            .or_else(|| {
+                                image
+                                    .attr("abs:data-lazy-src")
+                                    .filter(|value| !value.is_empty())
+                            })
+                            .or_else(|| {
+                                image
+                                    .attr("abs:data-src")
+                                    .filter(|value| !value.is_empty())
+                            })
+                            .or_else(|| image.attr("abs:src"))
+                    })
+                    .filter(|value| !value.ends_with("no-image.png"))
+                    .or_else(|| Some(Self::cover_for(&key)));
 
                 entries.push(Manga {
                     key,
                     title,
                     cover,
                     url: Some(href),
-                    content_rating: ContentRating::Safe,
+                    content_rating: ContentRating::NSFW,
                     ..Default::default()
                 });
             }
         }
 
-        let has_next_page = entries.len() == PAGE_SIZE as usize;
+        let has_next_page = document
+            .select_first(".pagination a[rel=next]")
+            .is_some();
 
         Ok(MangaPageResult {
             entries,
@@ -134,84 +171,102 @@ impl InManga {
         })
     }
 
-    fn parse_status(value: &str) -> MangaStatus {
-        let status = value.to_lowercase();
-        if status.contains("en emisión") || status.contains("en emision") {
-            MangaStatus::Ongoing
-        } else if status.contains("finalizado") {
-            MangaStatus::Completed
-        } else if status.contains("pausado") || status.contains("hiatus") {
-            MangaStatus::Hiatus
-        } else if status.contains("cancelado") {
-            MangaStatus::Cancelled
-        } else {
-            MangaStatus::Unknown
-        }
+    fn popular(page: i32) -> Result<MangaPageResult> {
+        Self::parse_cards(&format!(
+            "{BASE_URL}/filterList?page={page}&sortBy=views&asc=false"
+        ))
     }
 
-    fn chapter_list(manga_id: &str) -> Result<Vec<Chapter>> {
-        let outer: InMangaResultDto = Self::request_headers(Request::get(format!(
-            "{BASE_URL}/chapter/getall?mangaIdentification={manga_id}"
+    fn latest(page: i32) -> Result<MangaPageResult> {
+        let response: LatestResponse = Self::request(Request::get(format!(
+            "{BASE_URL}/lasted?p={page}"
         ))?)
         .header("Accept", "application/json, text/plain, */*")
         .json_owned()?;
 
-        let Some(data) = outer.data else {
-            return Ok(Vec::new());
-        };
+        let entries = response
+            .data
+            .into_iter()
+            .map(|item| Self::manga_from_slug(item.slug, item.name))
+            .collect();
 
-        if data.trim().is_empty() {
-            return Ok(Vec::new());
-        }
+        Ok(MangaPageResult {
+            entries,
+            has_next_page: page < response.total_pages,
+        })
+    }
 
-        let inner: InMangaResultObjectDto<InMangaChapterDto> =
-            serde_json::from_str(&data)?;
+    fn search(query: &str) -> Result<MangaPageResult> {
+        let encoded = encode_uri_component(query);
+        let response: SearchResponse = Self::request(Request::get(format!(
+            "{BASE_URL}/search?q={encoded}"
+        ))?)
+        .header("Accept", "application/json, text/plain, */*")
+        .json_owned()?;
 
-        if !inner.success {
-            return Ok(Vec::new());
-        }
+        let entries = response
+            .suggestions
+            .into_iter()
+            .map(|item| Self::manga_from_slug(item.data, item.value))
+            .collect();
 
-        let mut chapters = Vec::new();
+        Ok(MangaPageResult {
+            entries,
+            has_next_page: false,
+        })
+    }
 
-        for item in inner.result {
-            let key = item.identification.unwrap_or_default();
-            if key.is_empty() {
-                continue;
+    fn parse_status(value: &str) -> MangaStatus {
+        let normalized = value.trim().to_lowercase();
+
+        match normalized.as_str() {
+            "ongoing" | "activo" | "en curso" | "en emisión" | "en emision" => {
+                MangaStatus::Ongoing
             }
-
-            let number = item.number.map(|value| value as f32);
-            let friendly = item
-                .friendly_chapter_number
-                .unwrap_or_else(|| number.map(|value| value.to_string()).unwrap_or_default());
-
-            chapters.push(Chapter {
-                key: key.clone(),
-                title: if friendly.is_empty() {
-                    None
-                } else {
-                    Some(format!("Capítulo {friendly}"))
-                },
-                chapter_number: number,
-                url: Some(format!(
-                    "{BASE_URL}/chapter/chapterIndexControls?identification={key}"
-                )),
-                language: Some("es".into()),
-                ..Default::default()
-            });
+            "complete" | "completo" | "finalizado" | "completado" => {
+                MangaStatus::Completed
+            }
+            "dropped" | "cancelado" | "cancelada" => MangaStatus::Cancelled,
+            "hiatus" | "pausado" | "pausada" => MangaStatus::Hiatus,
+            _ => MangaStatus::Unknown,
         }
+    }
 
-        chapters.sort_by(|left, right| {
-            right
-                .chapter_number
-                .partial_cmp(&left.chapter_number)
-                .unwrap_or(Ordering::Equal)
-        });
+    fn chapters(manga_url: &str) -> Result<Vec<Chapter>> {
+        let encoded = encode_uri_component(manga_url);
+        let url = format!("{CLOUD_URL}/m440/chapters?url={encoded}");
 
-        Ok(chapters)
+        let items: Vec<ProxyChapter> = Self::request(Request::get(url)?)
+            .header("Accept", "application/json")
+            .json_owned()?;
+
+        Ok(items
+            .into_iter()
+            .map(|item| {
+                let number = item.number.parse::<f32>().ok();
+                let generic = format!("Capítulo {}", item.number);
+                let name = item.name.trim();
+
+                let title = if name.is_empty() || name == generic {
+                    Some(generic)
+                } else {
+                    Some(format!("{generic}: {name}"))
+                };
+
+                Chapter {
+                    key: item.slug.clone(),
+                    title,
+                    chapter_number: number,
+                    url: Some(format!("{manga_url}/{}", item.slug)),
+                    language: Some("es".into()),
+                    ..Default::default()
+                }
+            })
+            .collect())
     }
 }
 
-impl Source for InManga {
+impl Source for M440 {
     fn new() -> Self {
         Self
     }
@@ -222,8 +277,19 @@ impl Source for InManga {
         page: i32,
         _filters: Vec<aidoku::FilterValue>,
     ) -> Result<MangaPageResult> {
-        let query = query.unwrap_or_default();
-        Self::manga_list(page, query.trim(), 1)
+        match query {
+            Some(value) if !value.trim().is_empty() => {
+                if page > 1 {
+                    Ok(MangaPageResult {
+                        entries: Vec::new(),
+                        has_next_page: false,
+                    })
+                } else {
+                    Self::search(value.trim())
+                }
+            }
+            _ => Self::popular(page),
+        }
     }
 
     fn get_manga_update(
@@ -232,17 +298,16 @@ impl Source for InManga {
         needs_details: bool,
         needs_chapters: bool,
     ) -> Result<Manga> {
-        if needs_details {
-            let manga_url = manga
-                .url
-                .clone()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| aidoku::imports::error::AidokuError::message("Falta la URL del manga"))?;
+        let manga_url = manga
+            .url
+            .clone()
+            .unwrap_or_else(|| format!("{BASE_URL}/manga/{}", manga.key));
 
-            let document = Self::request_headers(Request::get(manga_url)?).html()?;
+        if needs_details {
+            let document = Self::request(Request::get(manga_url.clone())?).html()?;
 
             if let Some(title) = document
-                .select_first("div.col-md-9 h1, h1")
+                .select_first(".listmanga-header, .widget-title, div.manga-name h1, h1")
                 .and_then(|item| item.text())
                 .filter(|value| !value.is_empty())
             {
@@ -250,107 +315,106 @@ impl Source for InManga {
             }
 
             manga.cover = document
-                .select_first("div.col-md-3 div.panel.widget img")
-                .and_then(|item| item.attr("abs:src"))
-                .or(manga.cover);
+                .select_first(".row img.img-responsive, div.manga-cover img, img.img-responsive")
+                .and_then(|image| {
+                    image
+                        .attr("abs:data-src")
+                        .filter(|value| !value.is_empty())
+                        .or_else(|| image.attr("abs:src"))
+                })
+                .or(manga.cover)
+                .or_else(|| Some(Self::cover_for(&manga.key)));
 
             manga.description = document
-                .select_first("div.col-md-9 div.panel-body")
+                .select_first(".row .well, div.manga-description, div.description")
                 .and_then(|item| item.text())
                 .filter(|value| !value.is_empty());
 
             if let Some(status) = document
-                .select_first("a.list-group-item:contains(estado) span")
+                .select_first("div.manga-name span.label")
                 .and_then(|item| item.text())
             {
                 manga.status = Self::parse_status(&status);
             }
 
-            manga.content_rating = ContentRating::Safe;
+            manga.url = Some(manga_url.clone());
+            manga.content_rating = ContentRating::NSFW;
         }
 
         if needs_chapters {
-            manga.chapters = Some(Self::chapter_list(&manga.key)?);
+            manga.chapters = Some(Self::chapters(&manga_url)?);
         }
 
         Ok(manga)
     }
 
-    fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-        let chapter_url = chapter
-            .url
-            .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "{BASE_URL}/chapter/chapterIndexControls?identification={}",
-                    chapter.key
-                )
-            });
+    fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+        let chapter_url = match chapter.url {
+            Some(value) if !value.is_empty() => value,
+            _ => bail!("Falta la URL del capítulo."),
+        };
 
-        let document = Self::request_headers(Request::get(chapter_url)?).html()?;
-
-        let chapter_id = document
-            .select_first("input#ChapterIdentification")
-            .and_then(|item| item.attr("value"))
-            .filter(|value| !value.is_empty())
-            .unwrap_or(chapter.key);
-
-        let manga_id = document
-            .select_first("input#MangaIdentification")
-            .and_then(|item| item.attr("value"))
-            .filter(|value| !value.is_empty())
-            .unwrap_or(manga.key);
-
+        let document = Self::request(Request::get(chapter_url)?).html()?;
         let mut pages = Vec::new();
 
-        if let Some(images) = document.select("img.ImageContainer") {
+        if let Some(images) = document.select("#all > img.img-responsive") {
             for image in images {
-                let image_id = image.attr("id").unwrap_or_default();
-
-                let url = if !image_id.is_empty() {
-                    format!("{IMAGE_CDN}/i/m/{manga_id}/c/{chapter_id}/o/{image_id}.jpg")
-                } else {
-                    image
-                        .attr("abs:src")
-                        .or_else(|| image.attr("abs:data-src"))
-                        .unwrap_or_default()
-                };
+                let url = image
+                    .attr("abs:data-background-image")
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        image
+                            .attr("abs:data-cfsrc")
+                            .filter(|value| !value.is_empty())
+                    })
+                    .or_else(|| {
+                        image
+                            .attr("abs:data-lazy-src")
+                            .filter(|value| !value.is_empty())
+                    })
+                    .or_else(|| {
+                        image
+                            .attr("abs:data-src")
+                            .filter(|value| !value.is_empty())
+                    })
+                    .or_else(|| image.attr("abs:src"))
+                    .unwrap_or_default();
 
                 if url.is_empty() {
                     continue;
                 }
 
                 pages.push(Page {
-                    content: PageContent::url(url),
+                    content: PageContent::url(Self::absolute_url(&url)),
                     ..Default::default()
                 });
             }
         }
 
         if pages.is_empty() {
-            bail!("InManga no devolvió páginas para este capítulo.");
+            bail!("M440 no devolvió páginas para este capítulo.");
         }
 
         Ok(pages)
     }
 }
 
-impl ListingProvider for InManga {
+impl ListingProvider for M440 {
     fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
         match listing.id.as_str() {
-            "popular" => Self::manga_list(page, "", 1),
-            "latest" => Self::manga_list(page, "", 3),
-            _ => bail!("Listado no compatible"),
+            "popular" => Self::popular(page),
+            "latest" => Self::latest(page),
+            _ => bail!("Listado no compatible."),
         }
     }
 }
 
-impl ImageRequestProvider for InManga {
+impl ImageRequestProvider for M440 {
     fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
         Ok(Request::get(url)?
             .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
             .header("Accept-Language", "es-CL,es;q=0.9,en;q=0.8")
-            .header("Referer", "https://inmanga.com/")
+            .header("Referer", "https://m440.in/")
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
@@ -358,4 +422,4 @@ impl ImageRequestProvider for InManga {
     }
 }
 
-register_source!(InManga, ListingProvider, ImageRequestProvider);
+register_source!(M440, ListingProvider, ImageRequestProvider);

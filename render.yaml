@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: yrepo-inmanga
+    name: yrepo-m440
     runtime: docker
     plan: free
     healthCheckPath: /health

@@ -1,2 +1,11 @@
 source-template/target/
 source-template/package.aix
+*.zip
+error-*.txt
+m440-prueba.html
+m440-capitulo.html
+m440-main.js
+m440-exis.js
+m440-crypto.js
+m440-descifrar.js
+m440-capitulos.json

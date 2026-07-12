@@ -1,22 +1,151 @@
+"use strict";
+
 const http = require("http");
-const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const vm = require("vm");
+const CryptoJS = require("crypto-js");
 
-const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 10000);
-const PROXY_TOKEN = process.env.PROXY_TOKEN || "yrp_D4CyHVNjrVcFpdR4Fovnxk79SkOBerjV";
 const PUBLIC_DIR = path.join(__dirname, "public");
-const MAX_BUFFER = 45 * 1024 * 1024;
-const CACHE_LIMIT_BYTES = 48 * 1024 * 1024;
+const BASE_URL = "https://m440.in";
+const USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
 
-const cache = new Map();
-let cacheBytes = 0;
+const chapterCache = new Map();
+let exisCache = { text: "", expiresAt: 0 };
 
-function contentType(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  return {
+function send(res, status, body, contentType = "text/plain; charset=utf-8") {
+  res.writeHead(status, {
+    "Content-Type": contentType,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": status === 200 ? "public, max-age=300" : "no-store",
+  });
+  res.end(body);
+}
+
+async function fetchText(url) {
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html,application/javascript,application/json;q=0.9,*/*;q=0.8",
+      "Accept-Language": "es-CL,es;q=0.9,en;q=0.8",
+      Referer: `${BASE_URL}/`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`${url} respondió con ${response.status}`);
+  }
+
+  return response.text();
+}
+
+async function getExisScript() {
+  const now = Date.now();
+
+  if (exisCache.text && exisCache.expiresAt > now) {
+    return exisCache.text;
+  }
+
+  const text = await fetchText(`${BASE_URL}/js/exis.js`);
+  exisCache = {
+    text,
+    expiresAt: now + 6 * 60 * 60 * 1000,
+  };
+
+  return text;
+}
+
+function extractUsaPoncho(html) {
+  const match = html.match(
+    /const\s+UsaPoncho\s*=\s*("(?:\\.|[^"\\])*")\s*;/s
+  );
+
+  if (!match) {
+    throw new Error("No se encontró UsaPoncho en la ficha del manga");
+  }
+
+  return JSON.parse(match[1]);
+}
+
+async function decryptChapters(mangaUrl) {
+  const cached = chapterCache.get(mangaUrl);
+  const now = Date.now();
+
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const [html, exis] = await Promise.all([
+    fetchText(mangaUrl),
+    getExisScript(),
+  ]);
+
+  const quietConsole = {
+    log() {},
+    info() {},
+    warn() {},
+    error() {},
+    trace() {},
+    debug() {},
+  };
+
+  const context = {
+    CryptoJS,
+    UsaPoncho: extractUsaPoncho(html),
+    console: quietConsole,
+  };
+
+  vm.createContext(context);
+  vm.runInContext(exis, context, { timeout: 5000 });
+
+  const serialized = vm.runInContext(
+    'typeof jschaptertemp !== "undefined" ? JSON.stringify(jschaptertemp) : ""',
+    context,
+    { timeout: 1000 }
+  );
+
+  if (!serialized) {
+    throw new Error("No se pudo obtener jschaptertemp");
+  }
+
+  const chapters = JSON.parse(serialized);
+
+  if (!Array.isArray(chapters)) {
+    throw new Error("La lista descifrada no es un arreglo");
+  }
+
+  chapterCache.set(mangaUrl, {
+    value: chapters,
+    expiresAt: now + 30 * 60 * 1000,
+  });
+
+  return chapters;
+}
+
+function safeStaticPath(pathname) {
+  const decoded = decodeURIComponent(pathname);
+  const relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
+  const fullPath = path.resolve(PUBLIC_DIR, relative);
+
+  if (!fullPath.startsWith(path.resolve(PUBLIC_DIR) + path.sep)) {
+    return null;
+  }
+
+  return fullPath;
+}
+
+function serveStatic(pathname, res) {
+  const fullPath = safeStaticPath(pathname);
+
+  if (!fullPath || !fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+    return false;
+  }
+
+  const extension = path.extname(fullPath).toLowerCase();
+  const contentTypes = {
     ".html": "text/html; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".aix": "application/octet-stream",
@@ -24,175 +153,111 @@ function contentType(filePath) {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
-    ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".txt": "text/plain; charset=utf-8",
-  }[ext] || "application/octet-stream";
-}
+  };
 
-function send(res, status, headers, body) {
-  res.writeHead(status, {
-    "Access-Control-Allow-Origin": "*",
-    "X-Content-Type-Options": "nosniff",
-    ...headers,
-  });
-  res.end(body);
-}
-
-function validTarget(raw) {
-  try {
-    const url = new URL(raw);
-    return (
-      url.protocol === "https:" &&
-      url.hostname === "stl.manhwa-online.com" &&
-      /\.(webp|jpg|jpeg|png)$/i.test(url.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function getCached(key) {
-  const item = cache.get(key);
-  if (!item) return null;
-  cache.delete(key);
-  cache.set(key, item);
-  return item;
-}
-
-function putCached(key, item) {
-  if (item.body.length > CACHE_LIMIT_BYTES / 2) return;
-  if (cache.has(key)) {
-    cacheBytes -= cache.get(key).body.length;
-    cache.delete(key);
-  }
-  cache.set(key, item);
-  cacheBytes += item.body.length;
-  while (cacheBytes > CACHE_LIMIT_BYTES && cache.size > 0) {
-    const oldest = cache.keys().next().value;
-    const removed = cache.get(oldest);
-    cache.delete(oldest);
-    cacheBytes -= removed.body.length;
-  }
-}
-
-function serveStatic(req, res) {
-  let cleanPath = decodeURIComponent(req.url.split("?")[0]);
-  if (cleanPath === "/") {
-    const html = `<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>YRepo Cloud</title><style>
-body{font-family:system-ui;background:#05080d;color:#fff;max-width:760px;margin:70px auto;padding:24px}
-h1{color:#36d9ff}code{background:#111a25;padding:4px 8px;border-radius:7px;word-break:break-all}
-.card{border:1px solid #1f91bb;border-radius:18px;padding:22px;background:#09121c}
-.ok{color:#76ffbd}
-</style></head><body><div class="card">
-<h1>YRepo Cloud</h1>
-<p class="ok">● Proxy activo</p>
-<p>Lista de fuentes para Aidoku:</p>
-<p><code>${new URL(req.url, "http://" + req.headers.host).origin}/index.min.json</code></p>
-</div></body></html>`;
-    send(res, 200, {"Content-Type":"text/html; charset=utf-8"}, html);
-    return true;
-  }
-
-  const relative = cleanPath.replace(/^\/+/, "");
-  const filePath = path.resolve(PUBLIC_DIR, relative);
-  const publicResolved = path.resolve(PUBLIC_DIR);
-
-  if (!filePath.startsWith(publicResolved + path.sep) && filePath !== publicResolved) {
-    send(res, 403, {"Content-Type":"text/plain; charset=utf-8"}, "Acceso denegado");
-    return true;
-  }
-
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
-
-  const stat = fs.statSync(filePath);
   res.writeHead(200, {
-    "Content-Type": contentType(filePath),
-    "Content-Length": stat.size,
-    "Cache-Control": filePath.endsWith("index.min.json")
-      ? "no-cache"
-      : "public, max-age=3600",
+    "Content-Type": contentTypes[extension] || "application/octet-stream",
     "Access-Control-Allow-Origin": "*",
+    "Cache-Control": extension === ".json" ? "no-cache" : "public, max-age=3600",
   });
-  if (req.method === "HEAD") {
-    res.end();
-  } else {
-    fs.createReadStream(filePath).pipe(res);
-  }
+
+  fs.createReadStream(fullPath).pipe(res);
   return true;
 }
 
-const server = http.createServer((req, res) => {
-  const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+const server = http.createServer(async (req, res) => {
+  try {
+    const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
-  if (requestUrl.pathname === "/health") {
-    return send(res, 200, {"Content-Type":"text/plain; charset=utf-8"}, "YRepo Cloud OK");
-  }
-
-  if (requestUrl.pathname === "/image") {
-    if (requestUrl.searchParams.get("token") !== PROXY_TOKEN) {
-      return send(res, 403, {"Content-Type":"text/plain; charset=utf-8"}, "Token inválido");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+      });
+      return res.end();
     }
 
-    const target = requestUrl.searchParams.get("url");
-    if (!target || !validTarget(target)) {
-      return send(res, 400, {"Content-Type":"text/plain; charset=utf-8"}, "URL no permitida");
+    if (requestUrl.pathname === "/health") {
+      return send(res, 200, "YRepo M440 OK");
     }
 
-    const cached = getCached(target);
-    if (cached) {
-      return send(res, 200, {
-        "Content-Type": cached.contentType,
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Content-Length": String(cached.body.length),
-      }, cached.body);
-    }
+    if (requestUrl.pathname === "/m440/chapters") {
+      const rawUrl = requestUrl.searchParams.get("url");
 
-    const args = [
-      "-4", "--http1.1",
-      "-L", "--fail", "--silent", "--show-error",
-      "--max-time", "45",
-      "--retry", "2", "--retry-delay", "1",
-      "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/142 Safari/537.36",
-      "-H", "Accept: image/webp,image/apng,image/*,*/*;q=0.8",
-      "-H", "Referer: https://manhwa-online.com/",
-      "-H", "Accept-Language: es-CL,es;q=0.9,en;q=0.8",
-      "-H", "Sec-Fetch-Dest: image",
-      "-H", "Sec-Fetch-Mode: no-cors",
-      "-H", "Sec-Fetch-Site: same-site",
-      target,
-    ];
-
-    execFile("curl", args, {encoding:"buffer", maxBuffer:MAX_BUFFER}, (error, stdout, stderr) => {
-      if (error || !stdout || stdout.length === 0) {
-        const detail = stderr ? stderr.toString("utf8").slice(0, 600) : String(error || "sin datos");
-        console.error("Proxy error:", target, detail);
-        return send(res, 502, {"Content-Type":"text/plain; charset=utf-8"},
-          `No se pudo obtener la imagen.\n${detail}`);
+      if (!rawUrl) {
+        return send(res, 400, "Falta el parámetro url");
       }
 
-      const lower = target.toLowerCase();
-      const type = lower.endsWith(".webp") ? "image/webp"
-        : lower.endsWith(".png") ? "image/png" : "image/jpeg";
-      const item = {body:stdout, contentType:type};
-      putCached(target, item);
-      console.log(`OK ${stdout.length} bytes ${target}`);
-      return send(res, 200, {
-        "Content-Type": type,
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Content-Length": String(stdout.length),
-      }, stdout);
-    });
-    return;
-  }
+      let mangaUrl;
 
-  if (!serveStatic(req, res)) {
-    send(res, 404, {"Content-Type":"text/plain; charset=utf-8"}, "No encontrado");
+      try {
+        mangaUrl = new URL(rawUrl);
+      } catch {
+        return send(res, 400, "URL inválida");
+      }
+
+      if (
+        mangaUrl.protocol !== "https:" ||
+        mangaUrl.hostname !== "m440.in" ||
+        !mangaUrl.pathname.startsWith("/manga/")
+      ) {
+        return send(res, 400, "URL no permitida");
+      }
+
+      const chapters = await decryptChapters(mangaUrl.toString());
+
+      return send(
+        res,
+        200,
+        JSON.stringify(chapters),
+        "application/json; charset=utf-8"
+      );
+    }
+
+    if (requestUrl.pathname === "/") {
+      const indexPath = path.join(PUBLIC_DIR, "index.min.json");
+      const listExists = fs.existsSync(indexPath);
+
+      return send(
+        res,
+        200,
+        `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YRepo M440</title>
+<style>
+body{font-family:system-ui;margin:40px;max-width:760px;line-height:1.5}
+code{background:#f2f2f2;padding:4px 7px;border-radius:6px;word-break:break-all}
+</style>
+</head>
+<body>
+<h1>YRepo M440 activo</h1>
+<p>Proxy de capítulos: <strong>activo</strong>.</p>
+<p>Lista de Aidoku: ${
+          listExists
+            ? `<code>https://${req.headers.host}/index.min.json</code>`
+            : "todavía no generada"
+        }</p>
+</body>
+</html>`,
+        "text/html; charset=utf-8"
+      );
+    }
+
+    if (serveStatic(requestUrl.pathname, res)) {
+      return;
+    }
+
+    return send(res, 404, "No encontrado");
+  } catch (error) {
+    console.error(error);
+    return send(res, 500, `Error: ${error.message}`);
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`YRepo Cloud escuchando en 0.0.0.0:${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`YRepo M440 escuchando en el puerto ${PORT}`);
 });

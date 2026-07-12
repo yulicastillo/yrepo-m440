@@ -1,15 +1,17 @@
 {
   "info": {
-    "id": "es.inmanga",
-    "name": "InManga",
+    "id": "es.m440",
+    "name": "M440",
     "version": 1,
-    "url": "https://inmanga.com",
+    "url": "https://m440.in",
     "urls": [
-      "https://inmanga.com",
-      "https://cdn1.intomanga.com",
+      "https://m440.in",
+      "https://s2.m440.in",
+      "https://s2.mangas.in",
+      "https://cdn.statically.io",
       "__YREPO_CLOUD_URL__"
     ],
-    "contentRating": 0,
+    "contentRating": 2,
     "languages": [
       "es"
     ]
