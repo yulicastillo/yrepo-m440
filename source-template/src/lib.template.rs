@@ -237,7 +237,7 @@ impl M440 {
 
         if let Some(scripts) = document.select("script") {
             for script in scripts {
-                let Some(text) = script.text() else {
+                let Some(text) = script.data() else {
                     continue;
                 };
 

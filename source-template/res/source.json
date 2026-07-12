@@ -1,29 +1,29 @@
 {
-  "info": {
-    "id": "es.m440",
-    "name": "M440",
-    "version": 2,
-    "url": "https://m440.in",
-    "urls": [
-      "https://m440.in",
-      "https://s2.m440.in",
-      "https://s2.mangas.in",
-      "https://cdn.statically.io",
-      "https://yrepo-m440.onrender.com"
-    ],
-    "contentRating": 2,
-    "languages": [
-      "es"
-    ]
-  },
-  "listings": [
-    {
-      "id": "popular",
-      "name": "Populares"
-    },
-    {
-      "id": "latest",
-      "name": "Novedades"
-    }
-  ]
+    "info":  {
+                 "id":  "es.m440",
+                 "name":  "M440",
+                 "version":  3,
+                 "url":  "https://m440.in",
+                 "urls":  [
+                              "https://m440.in",
+                              "https://s2.m440.in",
+                              "https://s2.mangas.in",
+                              "https://cdn.statically.io",
+                              "https://yrepo-m440.docs-u-yuli.workers.dev"
+                          ],
+                 "contentRating":  2,
+                 "languages":  [
+                                   "es"
+                               ]
+             },
+    "listings":  [
+                     {
+                         "id":  "popular",
+                         "name":  "Populares"
+                     },
+                     {
+                         "id":  "latest",
+                         "name":  "Novedades"
+                     }
+                 ]
 }

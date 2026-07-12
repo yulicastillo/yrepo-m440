@@ -15,7 +15,7 @@ use aidoku::{
 use serde::Deserialize;
 
 const BASE_URL: &str = "https://m440.in";
-const CLOUD_URL: &str = "https://yrepo-m440.onrender.com";
+const CLOUD_URL: &str = "https://yrepo-m440.docs-u-yuli.workers.dev";
 
 #[derive(Deserialize)]
 struct SearchResponse {
@@ -237,7 +237,7 @@ impl M440 {
 
         if let Some(scripts) = document.select("script") {
             for script in scripts {
-                let Some(text) = script.text() else {
+                let Some(text) = script.data() else {
                     continue;
                 };
 
