@@ -9,3 +9,7 @@ m440-exis.js
 m440-crypto.js
 m440-descifrar.js
 m440-capitulos.json
+
+node_modules/
+dist-worker/
+m440-nanatsu.html
