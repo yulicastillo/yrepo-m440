@@ -1,53 +1,53 @@
-{
-  "name": "Source List",
-  "sources": [
-    {
-      "id": "es.m440",
-      "name": "M440",
-      "version": 3,
-      "iconURL": "icons/es.m440-v2.png",
-      "downloadURL": "sources/es.m440-v3.aix",
-      "languages": [
-        "es"
-      ],
-      "contentRating": 2,
-      "baseURL": "https://m440.in"
-    },
-    {
-      "id": "es.inmanga",
-      "name": "InManga",
-      "version": 1,
-      "iconURL": "icons/es.inmanga-v1.png",
-      "downloadURL": "sources/es.inmanga-v1.aix",
-      "languages": [
-        "es"
-      ],
-      "contentRating": 0,
-      "baseURL": "https://inmanga.com"
-    },
-    {
-      "id": "es.shadow-manga",
-      "name": "Shadow Manga",
-      "version": 3,
-      "iconURL": "icons/es.shadow-manga-v1.png",
-      "downloadURL": "sources/es.shadow-manga-v3.aix",
-      "languages": [
-        "es"
-      ],
-      "contentRating": 2,
-      "baseURL": "https://shademanga.com"
-    },
-    {
-      "id": "es.manhwa-online",
-      "name": "Manhwa Online",
-      "version": 43,
-      "iconURL": "icons/es.manhwa-online-v31.png",
-      "downloadURL": "sources/es.manhwa-online-v43.aix",
-      "languages": [
-        "es"
-      ],
-      "contentRating": 1,
-      "baseURL": "https://manhwa-online.com"
-    }
-  ]
+﻿{
+    "name":  "Test",
+    "sources":  [
+                    {
+                        "id":  "es.inmanga",
+                        "name":  "InManga",
+                        "version":  1,
+                        "iconURL":  "icons/es.inmanga-v1.png",
+                        "downloadURL":  "sources/es.inmanga-v1.aix",
+                        "languages":  [
+                                          "es"
+                                      ],
+                        "contentRating":  0,
+                        "baseURL":  "https://inmanga.com"
+                    },
+                    {
+                        "id":  "es.m440",
+                        "name":  "M440",
+                        "version":  3,
+                        "iconURL":  "icons/es.m440-v2.png",
+                        "downloadURL":  "sources/es.m440-v3.aix",
+                        "languages":  [
+                                          "es"
+                                      ],
+                        "contentRating":  2,
+                        "baseURL":  "https://m440.in"
+                    },
+                    {
+                        "id":  "es.manhwa-online",
+                        "name":  "Manhwa Online",
+                        "version":  43,
+                        "iconURL":  "icons/es.manhwa-online-v43.png",
+                        "downloadURL":  "sources/es.manhwa-online-v43.aix",
+                        "languages":  [
+                                          "es"
+                                      ],
+                        "contentRating":  1,
+                        "baseURL":  "https://manhwa-online.com"
+                    },
+                    {
+                        "id":  "es.shadow-manga",
+                        "name":  "Shadow Manga",
+                        "version":  3,
+                        "iconURL":  "icons/es.shadow-manga-v1.png",
+                        "downloadURL":  "sources/es.shadow-manga-v3.aix",
+                        "languages":  [
+                                          "es"
+                                      ],
+                        "contentRating":  2,
+                        "baseURL":  "https://shademanga.com"
+                    }
+                ]
 }
